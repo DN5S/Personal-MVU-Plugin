@@ -18,6 +18,8 @@ public record ChatState : IState
     public bool AutoScroll { get; init; } = true;
     public bool ShowTimestamps { get; init; } = true;
     
+    object ICloneable.Clone() => this with { };
+    
     public static ChatState Initial => new()
     {
         EnabledChannels = ImmutableHashSet.Create(

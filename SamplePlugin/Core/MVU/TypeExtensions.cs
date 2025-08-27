@@ -1,11 +1,26 @@
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
+using System.Reflection;
 
 namespace SamplePlugin.Core.MVU;
 
 public static class TypeExtensions
 {
+    // Cache for expensive reflection results
+    // ConcurrentDictionary is thread-safe for concurrent reads/writes
+    private static readonly ConcurrentDictionary<Type, bool> IsRecordCache = new();
+    private static readonly ConcurrentDictionary<Type, PropertyInfo?> PropertyCache = new();
+    private static readonly ConcurrentDictionary<Type, MethodInfo?> MethodCache = new();
+    private static readonly ConcurrentDictionary<Type, ConstructorInfo[]> ConstructorCache = new();
+    
     public static bool IsRecord(this Type type)
+    {
+        // Check cache first
+        return IsRecordCache.GetOrAdd(type, static t => DetermineIfRecord(t));
+    }
+    
+    private static bool DetermineIfRecord(Type type)
     {
         try
         {
@@ -14,17 +29,22 @@ public static class TypeExtensions
                 return false;
             
             // Check if the type has EqualityContract property (records have this)
-            var equalityContractProperty = type.GetProperty("EqualityContract", 
-                System.Reflection.BindingFlags.NonPublic | 
-                System.Reflection.BindingFlags.Instance);
+            var equalityContractProperty = PropertyCache.GetOrAdd(
+                type,
+                static t => t.GetProperty("EqualityContract", 
+                    BindingFlags.NonPublic | BindingFlags.Instance)
+            );
                 
             // Check if the type has <Clone>$ method (another record indicator)
-            var cloneMethod = type.GetMethod("<Clone>$", 
-                System.Reflection.BindingFlags.Public | 
-                System.Reflection.BindingFlags.Instance);
+            var cloneMethod = MethodCache.GetOrAdd(
+                type,
+                static t => t.GetMethod("<Clone>$", 
+                    BindingFlags.Public | BindingFlags.Instance)
+            );
             
             // Check for a copy constructor (parameter of the same type)
-            var hasCopyConstructor = type.GetConstructors()
+            var constructors = ConstructorCache.GetOrAdd(type, static t => t.GetConstructors());
+            var hasCopyConstructor = constructors
                 .Any(c => c.GetParameters().Length == 1 && 
                          c.GetParameters()[0].ParameterType == type);
             
@@ -45,5 +65,16 @@ public static class TypeExtensions
             // This ensures the fallback mechanism in the calling code is used
             return false;
         }
+    }
+    
+    /// <summary>
+    /// Clear all caches - useful for testing or if types are dynamically generated
+    /// </summary>
+    public static void ClearCaches()
+    {
+        IsRecordCache.Clear();
+        PropertyCache.Clear();
+        MethodCache.Clear();
+        ConstructorCache.Clear();
     }
 }

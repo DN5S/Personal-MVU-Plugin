@@ -10,31 +10,24 @@ namespace SamplePlugin.Core.MVU;
 public delegate UpdateResult<TState> UpdateFunction<TState>(TState state, IAction action) 
     where TState : IState;
 
-public delegate Task MiddlewareDelegate<TState>(TState state, IAction action, Func<Task> next) 
+public delegate Task MiddlewareDelegate<in TState>(TState state, IAction action, Func<Task> next) 
     where TState : IState;
 
-public class Store<TState> : IStore<TState>, IDisposable where TState : IState
+public class Store<TState>(TState initialState, UpdateFunction<TState> updateFunction) : IStore<TState>, IDisposable
+    where TState : IState
 {
-    private readonly UpdateFunction<TState> update;
-    private readonly List<MiddlewareDelegate<TState>> middlewares = new();
+    private readonly List<MiddlewareDelegate<TState>> middlewares = [];
     private readonly Dictionary<Type, object> effectHandlers = new();
-    private readonly BehaviorSubject<TState> stateSubject;
+    private readonly BehaviorSubject<TState> stateSubject = new(initialState);
     private readonly Subject<IAction> actionSubject = new();
     private readonly SemaphoreSlim semaphore = new(1, 1);
-    private TState currentState;
+    private TState currentState = initialState;
     private long version;
     
     public TState State => currentState;
     public IObservable<TState> StateChanged => stateSubject;
     public IObservable<IAction> ActionDispatched => actionSubject;
-    
-    public Store(TState initialState, UpdateFunction<TState> updateFunction)
-    {
-        currentState = initialState;
-        update = updateFunction;
-        stateSubject = new BehaviorSubject<TState>(initialState);
-    }
-    
+
     public void UseMiddleware(MiddlewareDelegate<TState> middleware)
     {
         middlewares.Add(middleware);
@@ -71,14 +64,21 @@ public class Store<TState> : IStore<TState>, IDisposable where TState : IState
     
     private Func<Task> BuildMiddlewarePipeline(IAction action)
     {
+        return middlewares
+               .Reverse<MiddlewareDelegate<TState>>()
+               .Aggregate(
+                   (Func<Task>)CoreUpdate,
+                   (next, middleware) => () => middleware(currentState, action, next)
+               );
+
         async Task CoreUpdate()
         {
-            var result = update(currentState, action);
+            var result = updateFunction(currentState, action);
             
             if (!ReferenceEquals(result.NewState, currentState))
             {
                 version++;
-                currentState = SetVersion(result.NewState, version);
+                currentState = Store<TState>.SetVersion(result.NewState, version);
                 stateSubject.OnNext(currentState);
             }
             
@@ -87,13 +87,6 @@ public class Store<TState> : IStore<TState>, IDisposable where TState : IState
                 await HandleEffect(effect);
             }
         }
-        
-        return middlewares
-            .Reverse<MiddlewareDelegate<TState>>()
-            .Aggregate(
-                (Func<Task>)CoreUpdate,
-                (next, middleware) => () => middleware(currentState, action, next)
-            );
     }
     
     private async Task HandleEffect(IEffect effect)
@@ -106,60 +99,29 @@ public class Store<TState> : IStore<TState>, IDisposable where TState : IState
             var handleMethod = handlerType.GetMethod("HandleAsync");
             if (handleMethod != null)
             {
-                var task = handleMethod.Invoke(handler, new object[] { effect, this }) as Task;
-                if (task != null)
+                if (handleMethod.Invoke(handler, [effect, this]) is Task task)
                     await task;
             }
         }
     }
     
-    private TState SetVersion(TState state, long newVersion)
+    private static TState SetVersion(TState state, long newVersion)
     {
         var type = state.GetType();
+        var versionProp = type.GetProperty(nameof(IState.Version));
         
-        // Try to use record-specific copy constructor for better performance
-        // This is an optimization - if it fails, we fall back to property copying
-        if (type.IsRecord())
+        if (versionProp?.CanWrite == true)
         {
-            try
+            if (type.IsRecord())
             {
-                // Records have a synthesized copy constructor
-                var copyConstructor = type.GetConstructors()
-                    .FirstOrDefault(c => c.GetParameters().Length == 1 && 
-                                         c.GetParameters()[0].ParameterType == type);
-                
-                if (copyConstructor != null)
-                {
-                    // Use the copy constructor to create a new instance
-                    var newState = (TState)copyConstructor.Invoke(new object[] { state });
-                    
-                    // Update the Version property
-                    var versionProp = type.GetProperty("Version");
-                    if (versionProp?.CanWrite == true)
-                    {
-                        versionProp.SetValue(newState, newVersion);
-                        return newState;
-                    }
-                }
+                // Create a shallow copy and update the version
+                var newState = (TState)state.Clone();
+                versionProp.SetValue(newState, newVersion);
+                return newState;
             }
-            catch
-            {
-                // If record optimization fails, fall through to general approach
-            }
+            versionProp.SetValue(state, newVersion);
         }
-        
-        // General approach: create new instance and copy all properties
-        // This works for both records and regular classes
-        var instance = (TState)Activator.CreateInstance(type)!;
-        foreach (var prop in type.GetProperties())
-        {
-            if (prop.CanRead && prop.CanWrite)
-            {
-                var value = prop.Name == "Version" ? newVersion : prop.GetValue(state);
-                prop.SetValue(instance, value);
-            }
-        }
-        return instance;
+        return state;
     }
     
     public void Dispose()
