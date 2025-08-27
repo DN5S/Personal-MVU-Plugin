@@ -191,6 +191,197 @@ public class ModuleManager(IServiceProvider globalServices, IPluginLog logger) :
         return Registry.ModuleInfos.GetValueOrDefault(moduleName);
     }
     
+    /// <summary>
+    /// Gets all modules that directly depend on the specified module
+    /// </summary>
+    public IReadOnlyList<string> GetDependentModules(string moduleName)
+    {
+        var dependents = new List<string>();
+        
+        // Check loaded modules
+        foreach (var module in modules)
+        {
+            if (module.Dependencies.Contains(moduleName))
+            {
+                dependents.Add(module.Name);
+            }
+        }
+        
+        // Also check registered but unloaded modules
+        foreach (var kvp in Registry.ModuleInfos)
+        {
+            if (kvp.Value.Dependencies.Contains(moduleName) && !dependents.Contains(kvp.Key))
+            {
+                dependents.Add(kvp.Key);
+            }
+        }
+        
+        return dependents.AsReadOnly();
+    }
+    
+    /// <summary>
+    /// Gets all modules that depend on the specified module (including transitive dependencies)
+    /// </summary>
+    public IReadOnlyList<string> GetAllDependentModules(string moduleName)
+    {
+        var allDependents = new HashSet<string>();
+        var toCheck = new Queue<string>();
+        toCheck.Enqueue(moduleName);
+        
+        while (toCheck.Count > 0)
+        {
+            var current = toCheck.Dequeue();
+            var directDependents = GetDependentModules(current);
+            
+            foreach (var dependent in directDependents)
+            {
+                if (allDependents.Add(dependent))
+                {
+                    toCheck.Enqueue(dependent);
+                }
+            }
+        }
+        
+        return allDependents.ToList().AsReadOnly();
+    }
+    
+    /// <summary>
+    /// Checks if a module can be disabled safely (or returns a list of enabled dependents)
+    /// </summary>
+    public (bool canDisable, IReadOnlyList<string> dependents) CanDisableModule(string moduleName, PluginConfiguration configuration)
+    {
+        var allDependents = GetAllDependentModules(moduleName);
+        
+        // Filter to only include enabled dependents that would be affected
+        var enabledDependents = new List<string>();
+        foreach (var dependent in allDependents)
+        {
+            var depConfig = configuration.GetModuleConfig(dependent);
+            if (depConfig.IsEnabled)
+            {
+                enabledDependents.Add(dependent);
+            }
+        }
+        
+        return (enabledDependents.Count == 0, enabledDependents.AsReadOnly());
+    }
+    
+    /// <summary>
+    /// Checks if a module can be disabled safely (or returns a list of dependents)
+    /// This overload checks all dependents regardless of enabled status
+    /// </summary>
+    public (bool canDisable, IReadOnlyList<string> dependents) CanDisableModule(string moduleName)
+    {
+        var dependents = GetAllDependentModules(moduleName);
+        return (dependents.Count == 0, dependents);
+    }
+    
+    /// <summary>
+    /// Applies configuration changes by loading/unloading modules as needed
+    /// </summary>
+    public void ApplyConfigurationChanges(PluginConfiguration configuration)
+    {
+        // First, discover all modules if not already done
+        if (Registry.ModuleInfos.Count == 0)
+        {
+            Registry.DiscoverModules();
+        }
+        
+        // Build list of modules that should be loaded based on config
+        var modulesToLoad = new HashSet<string>();
+        var modulesToUnload = new HashSet<string>();
+        
+        foreach (var kvp in Registry.ModuleInfos)
+        {
+            var moduleName = kvp.Key;
+            var moduleConfig = configuration.GetModuleConfig(moduleName);
+            
+            var isCurrentlyLoaded = modules.Any(m => m.Name == moduleName);
+            
+            switch (moduleConfig.IsEnabled)
+            {
+                case true when !isCurrentlyLoaded:
+                    // Module should be loaded but isn't
+                    modulesToLoad.Add(moduleName);
+                    break;
+                case false when isCurrentlyLoaded:
+                    // Module is loaded but shouldn't be
+                    modulesToUnload.Add(moduleName);
+                    break;
+            }
+        }
+        
+        // Unload modules that should not be loaded
+        foreach (var moduleName in modulesToUnload)
+        {
+            logger.Information($"Unloading module {moduleName} due to configuration change");
+            UnloadModule(moduleName);
+        }
+        
+        // Load modules that should be loaded (in dependency order)
+        if (modulesToLoad.Count > 0)
+        {
+            var orderedModules = Registry.GetModulesInLoadOrder()
+                .Where(m => modulesToLoad.Contains(m))
+                .ToList();
+            
+            foreach (var moduleName in orderedModules)
+            {
+                // Check dependencies are satisfied
+                var moduleInfo = Registry.ModuleInfos[moduleName];
+                var dependenciesSatisfied = true;
+                
+                foreach (var dep in moduleInfo.Dependencies)
+                {
+                    var depConfig = configuration.GetModuleConfig(dep);
+                    if (!depConfig.IsEnabled || modules.All(m => m.Name != dep))
+                    {
+                        logger.Warning($"Cannot load module {moduleName} because dependency {dep} is not enabled");
+                        dependenciesSatisfied = false;
+                        break;
+                    }
+                }
+                
+                if (dependenciesSatisfied)
+                {
+                    var module = Registry.CreateModuleInstance(moduleName);
+                    if (module != null)
+                    {
+                        try
+                        {
+                            logger.Information($"Loading module {moduleName} due to configuration change");
+                            LoadModule(module);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.Error(ex, $"Failed to load module: {moduleName}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Checks if all dependencies for a module are satisfied
+    /// </summary>
+    public bool AreDependenciesSatisfied(string moduleName, PluginConfiguration configuration)
+    {
+        var moduleInfo = Registry.ModuleInfos.GetValueOrDefault(moduleName);
+        if (moduleInfo == null) return false;
+        
+        foreach (var dep in moduleInfo.Dependencies)
+        {
+            var depConfig = configuration.GetModuleConfig(dep);
+            if (!depConfig.IsEnabled)
+            {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
     public void Dispose()
     {
         foreach (var module in modules.ToList())

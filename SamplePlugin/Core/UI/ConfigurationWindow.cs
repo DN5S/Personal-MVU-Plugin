@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.Utility.Raii;
@@ -13,6 +15,8 @@ public class ConfigurationWindow : Window, IDisposable
     private readonly ModuleManager moduleManager;
     private readonly PluginConfiguration configuration;
     private string selectedModuleName = string.Empty;
+    private string moduleToDisable = string.Empty;
+    private List<string> affectedDependents = new();
     
     public ConfigurationWindow(ModuleManager moduleManager, PluginConfiguration configuration) 
         : base("Sample Plugin Configuration###SamplePluginConfig", ImGuiWindowFlags.None)
@@ -161,7 +165,7 @@ public class ConfigurationWindow : Window, IDisposable
         ImGui.Text("Module Management");
         ImGui.Separator();
         
-        if (LayoutHelpers.BeginSection("Loaded Modules"))
+        if (LayoutHelpers.BeginSection("Module Management"))
         {
             if (ImGui.BeginTable("ModuleTable", 4, 
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
@@ -172,23 +176,38 @@ public class ConfigurationWindow : Window, IDisposable
                 ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthStretch);
                 ImGui.TableHeadersRow();
                 
-                foreach (var module in moduleManager.LoadedModules)
+                // Show all registered modules, not just loaded ones
+                if (moduleManager.Registry.ModuleInfos.Count == 0)
                 {
+                    moduleManager.Registry.DiscoverModules();
+                }
+                
+                foreach (var kvp in moduleManager.Registry.ModuleInfos)
+                {
+                    var moduleName = kvp.Key;
+                    var moduleInfo = kvp.Value;
+                    
                     ImGui.TableNextRow();
                     
                     ImGui.TableNextColumn();
-                    ImGui.Text(module.Name);
+                    ImGui.Text(moduleName);
                     
                     ImGui.TableNextColumn();
-                    ImGui.TextDisabled(module.Version);
+                    ImGui.TextDisabled(moduleInfo.Version);
                     
                     ImGui.TableNextColumn();
                     
                     // Get module configuration to check if enabled
-                    var moduleConfig = configuration.GetModuleConfig(module.Name);
-                    if (moduleConfig.IsEnabled)
+                    var moduleConfig = configuration.GetModuleConfig(moduleName);
+                    var isLoaded = moduleManager.LoadedModules.Any(m => m.Name == moduleName);
+                    
+                    if (moduleConfig.IsEnabled && isLoaded)
                     {
-                        ImGui.TextColored(new Vector4(0, 1, 0, 1), "Enabled");
+                        ImGui.TextColored(new Vector4(0, 1, 0, 1), "Loaded");
+                    }
+                    else if (moduleConfig.IsEnabled && !isLoaded)
+                    {
+                        ImGui.TextColored(new Vector4(1, 1, 0, 1), "Enabled");
                     }
                     else
                     {
@@ -197,24 +216,64 @@ public class ConfigurationWindow : Window, IDisposable
                     
                     ImGui.TableNextColumn();
                     
-                    if (ImGui.Button($"Configure##{module.Name}"))
+                    if (ImGui.Button($"Configure##{moduleName}"))
                     {
-                        selectedModuleName = module.Name;
+                        selectedModuleName = moduleName;
                     }
                     
                     ImGui.SameLine();
                     
-                    var isEnabled = moduleConfig.IsEnabled;
-                    if (ImGui.Checkbox($"##Enable{module.Name}", ref isEnabled))
+                    // Show the current state from configuration
+                    var currentEnabled = moduleConfig.IsEnabled;
+                    var checkboxEnabled = currentEnabled;
+                    
+                    if (ImGui.Checkbox($"##Enable{moduleName}", ref checkboxEnabled))
                     {
-                        moduleConfig.IsEnabled = isEnabled;
-                        configuration.SetModuleConfig(module.Name, moduleConfig);
-                        configuration.Save();
+                        // Checkbox was clicked, check if we can actually change it
+                        if (currentEnabled && !checkboxEnabled)
+                        {
+                            // Trying to disable
+                            var (canDisable, dependents) = moduleManager.CanDisableModule(moduleName, configuration);
+                            if (!canDisable && dependents.Count > 0)
+                            {
+                                // Cannot disable, show warning
+                                moduleToDisable = moduleName;
+                                affectedDependents = dependents.ToList();
+                                ImGui.OpenPopup("Disable Module Warning");
+                                // Don't change the config yet
+                            }
+                            else
+                            {
+                                // Can disable directly
+                                moduleConfig.IsEnabled = false;
+                                configuration.SetModuleConfig(moduleName, moduleConfig);
+                                configuration.Save();
+                                moduleManager.ApplyConfigurationChanges(configuration);
+                            }
+                        }
+                        else if (!currentEnabled && checkboxEnabled)
+                        {
+                            // Trying to enable
+                            if (!moduleManager.AreDependenciesSatisfied(moduleName, configuration))
+                            {
+                                // Cannot enable, show error
+                                ImGui.OpenPopup("EnableDependencyError");
+                                // Don't change the config
+                            }
+                            else
+                            {
+                                // Can enable directly
+                                moduleConfig.IsEnabled = true;
+                                configuration.SetModuleConfig(moduleName, moduleConfig);
+                                configuration.Save();
+                                moduleManager.ApplyConfigurationChanges(configuration);
+                            }
+                        }
                     }
                     
                     if (ImGui.IsItemHovered())
                     {
-                        ImGui.SetTooltip(isEnabled ? "Disable module" : "Enable module");
+                        ImGui.SetTooltip(currentEnabled ? "Disable module" : "Enable module");
                     }
                 }
                 
@@ -261,13 +320,75 @@ public class ConfigurationWindow : Window, IDisposable
             ImGui.Spacing();
             
             // Show the dependency tree
-            foreach (var module in moduleManager.LoadedModules)
+            foreach (var kvp in moduleManager.Registry.ModuleInfos)
             {
-                if (module.Dependencies.Length == 0) continue;
+                if (kvp.Value.Dependencies.Length == 0) continue;
                 
-                ImGui.Text($"{module.Name} depends on: {string.Join(", ", module.Dependencies)}");
+                ImGui.Text($"{kvp.Key} depends on: {string.Join(", ", kvp.Value.Dependencies)}");
             }
             LayoutHelpers.EndSection();
+        }
+        
+        // Dependency warning popup modal
+        if (ImGui.BeginPopupModal("Disable Module Warning"))
+        {
+            ImGui.Text($"Warning: Disabling {moduleToDisable} will also disable:");
+            ImGui.Spacing();
+            
+            foreach (var dependent in affectedDependents)
+            {
+                ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), $"  • {dependent}");
+            }
+            
+            ImGui.Spacing();
+            ImGui.Text("Do you want to continue?");
+            ImGui.Spacing();
+            
+            if (ImGui.Button("Yes, Disable All", new Vector2(120, 0)))
+            {
+                // Disable the module and all its dependents
+                var moduleConfig = configuration.GetModuleConfig(moduleToDisable);
+                moduleConfig.IsEnabled = false;
+                configuration.SetModuleConfig(moduleToDisable, moduleConfig);
+                
+                // Also disable all dependent modules
+                foreach (var dependent in affectedDependents)
+                {
+                    var depConfig = configuration.GetModuleConfig(dependent);
+                    depConfig.IsEnabled = false;
+                    configuration.SetModuleConfig(dependent, depConfig);
+                }
+                
+                configuration.Save();
+                moduleManager.ApplyConfigurationChanges(configuration);
+                ImGui.CloseCurrentPopup();
+                moduleToDisable = string.Empty;
+                affectedDependents.Clear();
+            }
+            
+            ImGui.SameLine();
+            
+            if (ImGui.Button("Cancel", new Vector2(120, 0)))
+            {
+                ImGui.CloseCurrentPopup();
+                moduleToDisable = string.Empty;
+                affectedDependents.Clear();
+            }
+            
+            ImGui.EndPopup();
+        }
+        
+        // Dependency error popup for enabling
+        using var popup = ImRaii.Popup("EnableDependencyError");
+        if (popup)
+        {
+            ImGui.Text("Cannot enable this module because its dependencies are not enabled.");
+            ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), "Please enable the required dependencies first.");
+                
+            if (ImGui.Button("OK"))
+            {
+                ImGui.CloseCurrentPopup();
+            }
         }
     }
     
