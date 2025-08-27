@@ -68,7 +68,8 @@ public class ChatModule : ModuleBase
         var chatMessage = new ChatMessage
         {
             Type = type,
-            Timestamp = DateTimeOffset.FromUnixTimeSeconds(timestamp).LocalDateTime,
+            // Use current time instead of the timestamp parameter which may not be reliable
+            Timestamp = DateTime.Now,
             Sender = sender.TextValue,
             Message = message.TextValue
         };
