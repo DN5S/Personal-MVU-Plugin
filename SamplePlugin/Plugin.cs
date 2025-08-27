@@ -2,11 +2,10 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
 using Microsoft.Extensions.DependencyInjection;
-using SamplePlugin.Core;
-using SamplePlugin.Core.Application;
-using SamplePlugin.Core.Chat;
-using SamplePlugin.Chat;
-using SamplePlugin.Application;
+using SamplePlugin.Core.Module;
+using SamplePlugin.Core.Reactive;
+using SamplePlugin.Core.Configuration;
+using SamplePlugin.Core.UI;
 
 namespace SamplePlugin;
 
@@ -14,78 +13,110 @@ public sealed class Plugin : IDalamudPlugin
 {
     private readonly ServiceProvider serviceProvider;
     private readonly WindowSystem windowSystem;
-    private readonly IChatMessageProvider chatProvider;
+    private readonly ModuleManager moduleManager;
+    private readonly PluginConfiguration configuration;
+    private readonly MainWindow mainWindow;
+    private readonly ConfigurationWindow configWindow;
     
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
-        IChatGui chatGui)
+        IChatGui chatGui,
+        IPluginLog pluginLog)
     {
+        // Create a window system
+        windowSystem = new WindowSystem("SamplePlugin");
+        
+        // Initialize configuration
+        configuration = new PluginConfiguration();
+        configuration.Initialize(pluginInterface);
+        
+        // Setup DI container
         var services = new ServiceCollection();
         
         // Register Dalamud services
         services.AddSingleton(pluginInterface);
         services.AddSingleton(commandManager);
         services.AddSingleton(chatGui);
-        
-        // Register window system
-        windowSystem = new WindowSystem("SamplePlugin");
+        services.AddSingleton(pluginLog);
         services.AddSingleton(windowSystem);
         
-        // Register our implementations
-        services.AddSingleton<IChatMessageProvider, DalamudChatMessageProvider>();
+        // Register core services
+        services.AddSingleton<EventBus>();
+        services.AddSingleton<ModuleManager>();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton(configuration);
         
-        // Configure Core services
-        ServiceConfiguration.ConfigureServices(services);
-        
-        // Build DI container
+        // Build service provider
         serviceProvider = services.BuildServiceProvider();
         
-        // Initialize chat provider
-        chatProvider = serviceProvider.GetRequiredService<IChatMessageProvider>();
-        chatProvider.Initialize();
+        // Initialize module manager
+        moduleManager = serviceProvider.GetRequiredService<ModuleManager>();
         
-        // Create and register main window
-        var viewModel = serviceProvider.GetRequiredService<MainWindowViewModel>();
-        var mainWindow = new MainWindow(viewModel);
+        // Create main windows
+        configWindow = new ConfigurationWindow(moduleManager, configuration);
+        mainWindow = new MainWindow(moduleManager, configuration, () => configWindow.IsOpen = true);
+        
+        // Register windows
         windowSystem.AddWindow(mainWindow);
+        windowSystem.AddWindow(configWindow);
         
-        // Wire up chat events to view model
-        chatProvider.OnChatMessageReceived += (_, e) =>
-        {
-            viewModel.OnChatMessageReceived(new ChatMessageData
-            {
-                Message = e.Message,
-                Sender = e.Sender,
-                Timestamp = e.Timestamp
-            });
-        };
+        // Load modules using a discovery system
+        moduleManager.LoadAllRegisteredModules(configuration);
         
         // Register UI events
-        pluginInterface.UiBuilder.Draw += windowSystem.Draw;
-        pluginInterface.UiBuilder.OpenMainUi += () => mainWindow.IsOpen = true;
+        pluginInterface.UiBuilder.Draw += DrawUI;
+        pluginInterface.UiBuilder.OpenMainUi += OpenMainUI;
+        pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUI;
         
         // Register commands
-        commandManager.AddHandler("/SamplePlugin", new Dalamud.Game.Command.CommandInfo((_, _) => 
+        commandManager.AddHandler("/sampleplugin", new Dalamud.Game.Command.CommandInfo((_, _) => 
         {
-            mainWindow.IsOpen = true;
+            OpenMainUI();
         })
         {
             HelpMessage = "Open SamplePlugin window"
         });
+        
+        pluginLog.Information("SamplePlugin loaded successfully!");
+    }
+    
+    
+    private void DrawUI()
+    {
+        windowSystem.Draw();
+        moduleManager.DrawUI();
+    }
+    
+    private void OpenMainUI()
+    {
+        mainWindow.IsOpen = true;
+    }
+    
+    private void OpenConfigUI()
+    {
+        configWindow.IsOpen = true;
     }
     
     public void Dispose()
     {
-        windowSystem.RemoveAllWindows();
-        
         var pluginInterface = serviceProvider.GetRequiredService<IDalamudPluginInterface>();
-        pluginInterface.UiBuilder.Draw -= windowSystem.Draw;
+        pluginInterface.UiBuilder.Draw -= DrawUI;
+        pluginInterface.UiBuilder.OpenMainUi -= OpenMainUI;
+        pluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUI;
         
         var commandManager = serviceProvider.GetRequiredService<ICommandManager>();
-        commandManager.RemoveHandler("/SamplePlugin");
+        commandManager.RemoveHandler("/sampleplugin");
         
-        chatProvider?.Dispose();
-        serviceProvider?.Dispose();
+        // Save configuration before disposing
+        configuration.Save();
+        
+        // Dispose windows
+        windowSystem.RemoveAllWindows();
+        mainWindow.Dispose();
+        configWindow.Dispose();
+        
+        moduleManager.Dispose();
+        serviceProvider.Dispose();
     }
 }
