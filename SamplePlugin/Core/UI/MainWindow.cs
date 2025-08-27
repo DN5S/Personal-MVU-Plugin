@@ -66,24 +66,14 @@ public class MainWindow : Window, IDisposable
         
         ImGui.SetCursorPosY((windowSize.Y - textHeight) / 2);
         
-        var text = "No modules are currently loaded.";
-        var textWidth = ImGui.CalcTextSize(text).X;
-        ImGui.SetCursorPosX((windowSize.X - textWidth) / 2);
-        ImGui.TextDisabled(text);
+        LayoutHelpers.CenteredText("No modules are currently loaded.");
+        LayoutHelpers.CenteredText("Check the settings to enable modules.");
         
-        text = "Check the settings to enable modules.";
-        textWidth = ImGui.CalcTextSize(text).X;
-        ImGui.SetCursorPosX((windowSize.X - textWidth) / 2);
-        ImGui.TextDisabled(text);
+        ImGui.Spacing();
         
-        var buttonText = "Open Settings";
-        var buttonWidth = ImGui.CalcTextSize(buttonText).X + ImGui.GetStyle().FramePadding.X * 4;
-        ImGui.SetCursorPosX((windowSize.X - buttonWidth) / 2);
-        
-        if (ImGui.Button(buttonText))
-        {
-            openConfigWindow();
-        }
+        LayoutHelpers.DrawCenteredButtons(
+            ("Open Settings", () => openConfigWindow())
+        );
     }
     
     private void DrawModuleTabs()
@@ -117,12 +107,12 @@ public class MainWindow : Window, IDisposable
         if (moduleConfig.IsEnabled)
         {
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(0, 1, 0, 1), "[Enabled]");
+            ImGui.TextColored(LayoutHelpers.Colors.Enabled, "[Enabled]");
         }
         else
         {
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(1, 0, 0, 1), "[Disabled in config]");
+            ImGui.TextColored(LayoutHelpers.Colors.Disabled, "[Disabled in config]");
         }
         
         if (module.Dependencies.Length > 0)
@@ -142,7 +132,7 @@ public class MainWindow : Window, IDisposable
             }
             catch (Exception ex)
             {
-                ImGui.TextColored(new Vector4(1, 0, 0, 1), $"Error drawing module UI: {ex.Message}");
+                ImGui.TextColored(LayoutHelpers.Colors.Error, $"Error drawing module UI: {ex.Message}");
             }
         }
     }
@@ -161,9 +151,9 @@ public class MainWindow : Window, IDisposable
             
             ImGui.Text($"Total Configured Modules: {allModuleConfigs.Count}");
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(0, 1, 0, 1), $"Enabled: {enabledCount}");
+            ImGui.TextColored(LayoutHelpers.Colors.Success, $"Enabled: {enabledCount}");
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), $"Disabled: {disabledCount}");
+            ImGui.TextColored(LayoutHelpers.Colors.Warning, $"Disabled: {disabledCount}");
             
             ImGui.Text($"Currently Loaded: {moduleManager.LoadedModules.Count}");
             
@@ -204,7 +194,7 @@ public class MainWindow : Window, IDisposable
                     ImGui.TextDisabled(deps);
                     
                     ImGui.TableNextColumn();
-                    ImGui.TextColored(new Vector4(0, 1, 0, 1), "Active");
+                    ImGui.TextColored(LayoutHelpers.Colors.Success, "Active");
                 }
                 
                 ImGui.EndTable();
@@ -249,20 +239,16 @@ public class MainWindow : Window, IDisposable
         if (popup)
         {
             ImGui.Text("Are you sure you want to reload all modules?");
-            ImGui.Text("This may cause temporary interruption.");
-                
-            if (ImGui.Button("Yes, Reload"))
-            {
-                // Reload logic would go here
-                ImGui.CloseCurrentPopup();
-            }
-                
-            ImGui.SameLine();
-                
-            if (ImGui.Button("Cancel"))
-            {
-                ImGui.CloseCurrentPopup();
-            }
+            ImGui.TextColored(LayoutHelpers.Colors.Warning, "This may cause temporary interruption.");
+            ImGui.Spacing();
+            
+            LayoutHelpers.DrawCenteredButtons(
+                ("Yes, Reload", () => {
+                    // Reload logic would go here
+                    ImGui.CloseCurrentPopup();
+                }),
+                ("Cancel", () => ImGui.CloseCurrentPopup())
+            );
         }
     }
     

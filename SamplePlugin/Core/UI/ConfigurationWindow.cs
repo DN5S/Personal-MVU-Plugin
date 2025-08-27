@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
@@ -15,8 +14,6 @@ public class ConfigurationWindow : Window, IDisposable
     private readonly ModuleManager moduleManager;
     private readonly PluginConfiguration configuration;
     private string selectedModuleName = string.Empty;
-    private string moduleToDisable = string.Empty;
-    private List<string> affectedDependents = new();
     
     public ConfigurationWindow(ModuleManager moduleManager, PluginConfiguration configuration) 
         : base("Sample Plugin Configuration###SamplePluginConfig", ImGuiWindowFlags.None)
@@ -117,31 +114,26 @@ public class ConfigurationWindow : Window, IDisposable
             }
         }
         
-        using (var popup = ImRaii.Popup("ResetConfirmation"))
+        using (var resetPopup = ImRaii.Popup("ResetConfirmation"))
         {
-            if (popup)
+            if (resetPopup)
             {
                 ImGui.Text("Are you sure you want to reset all settings to defaults?");
-                ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), "This action cannot be undone!");
+                ImGui.TextColored(LayoutHelpers.Colors.Warning, "This action cannot be undone!");
                 
-                if (ImGui.Button("Yes, Reset"))
-                {
-                    configuration.Reset();
-                    ImGui.CloseCurrentPopup();
-                }
-                
-                ImGui.SameLine();
-                
-                if (ImGui.Button("Cancel"))
-                {
-                    ImGui.CloseCurrentPopup();
-                }
+                LayoutHelpers.DrawCenteredButtons(
+                    ("Yes, Reset", () => {
+                        configuration.Reset();
+                        ImGui.CloseCurrentPopup();
+                    }),
+                    ("Cancel", ImGui.CloseCurrentPopup)
+                );
             }
         }
         
-        using (var popup = ImRaii.Popup("ExportInfo"))
+        using (var exportPopup = ImRaii.Popup("ExportInfo"))
         {
-            if (popup)
+            if (exportPopup)
             {
                 ImGui.Text("Configuration export is not yet implemented.");
                 if (ImGui.Button("OK"))
@@ -149,9 +141,9 @@ public class ConfigurationWindow : Window, IDisposable
             }
         }
         
-        using (var popup = ImRaii.Popup("ImportWarning"))
+        using (var importPopup = ImRaii.Popup("ImportWarning"))
         {
-            if (popup)
+            if (importPopup)
             {
                 ImGui.Text("Configuration import is not yet implemented.");
                 if (ImGui.Button("OK"))
@@ -201,18 +193,7 @@ public class ConfigurationWindow : Window, IDisposable
                     var moduleConfig = configuration.GetModuleConfig(moduleName);
                     var isLoaded = moduleManager.LoadedModules.Any(m => m.Name == moduleName);
                     
-                    if (moduleConfig.IsEnabled && isLoaded)
-                    {
-                        ImGui.TextColored(new Vector4(0, 1, 0, 1), "Loaded");
-                    }
-                    else if (moduleConfig.IsEnabled && !isLoaded)
-                    {
-                        ImGui.TextColored(new Vector4(1, 1, 0, 1), "Enabled");
-                    }
-                    else
-                    {
-                        ImGui.TextColored(new Vector4(1, 0, 0, 1), "Disabled");
-                    }
+                    LayoutHelpers.DrawModuleStatus(moduleConfig.IsEnabled, isLoaded);
                     
                     ImGui.TableNextColumn();
                     
@@ -236,11 +217,9 @@ public class ConfigurationWindow : Window, IDisposable
                             var (canDisable, dependents) = moduleManager.CanDisableModule(moduleName, configuration);
                             if (!canDisable && dependents.Count > 0)
                             {
-                                // Cannot disable, show warning
-                                moduleToDisable = moduleName;
-                                affectedDependents = dependents.ToList();
-                                ImGui.OpenPopup("Disable Module Warning");
-                                // Don't change the config yet
+                                // Cannot disable - show inline warning
+                                ImGui.SameLine();
+                                ImGui.TextColored(LayoutHelpers.Colors.Warning, "[Has Dependencies]");
                             }
                             else
                             {
@@ -256,9 +235,9 @@ public class ConfigurationWindow : Window, IDisposable
                             // Trying to enable
                             if (!moduleManager.AreDependenciesSatisfied(moduleName, configuration))
                             {
-                                // Cannot enable, show error
-                                ImGui.OpenPopup("EnableDependencyError");
-                                // Don't change the config
+                                // Cannot enable - show inline warning
+                                ImGui.SameLine();
+                                ImGui.TextColored(LayoutHelpers.Colors.Error, "[Dependencies Missing]");
                             }
                             else
                             {
@@ -328,88 +307,6 @@ public class ConfigurationWindow : Window, IDisposable
             }
             LayoutHelpers.EndSection();
         }
-        
-        // Dependency warning popup modal
-        var popupOpen = true;
-        using (var disableWarningPopup = 
-               ImRaii.PopupModal("Disable Module Warning", ref popupOpen, 
-                                 ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove))
-        {
-            if (disableWarningPopup)
-            {
-                ImGui.SetWindowSize(new Vector2(400, 0));
-                
-                ImGui.Text($"Warning: Disabling {moduleToDisable} will also disable:");
-                ImGui.Spacing();
-                
-                // Create a child region for the dependent list to ensure proper scrolling if needed
-                using (ImRaii.Child("DependentsList", new Vector2(0, Math.Min(affectedDependents.Count * 25, 150)), true))
-                {
-                    foreach (var dependent in affectedDependents)
-                    {
-                        ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), $"  • {dependent}");
-                    }
-                }
-                
-                ImGui.Spacing();
-                ImGui.Separator();
-                ImGui.Spacing();
-                
-                ImGui.Text("Do you want to continue?");
-                ImGui.Spacing();
-                
-                var buttonWidth = 120f;
-                var spacing = 10f;
-                var totalWidth = buttonWidth * 2 + spacing;
-                var startX = (ImGui.GetContentRegionAvail().X - totalWidth) / 2;
-                
-                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + startX);
-                
-                if (ImGui.Button("Yes, Disable All", new Vector2(buttonWidth, 0)))
-                {
-                    // Disable the module and all its dependents
-                    var moduleConfig = configuration.GetModuleConfig(moduleToDisable);
-                    moduleConfig.IsEnabled = false;
-                    configuration.SetModuleConfig(moduleToDisable, moduleConfig);
-                    
-                    // Also disable all dependent modules
-                    foreach (var dependent in affectedDependents)
-                    {
-                        var depConfig = configuration.GetModuleConfig(dependent);
-                        depConfig.IsEnabled = false;
-                        configuration.SetModuleConfig(dependent, depConfig);
-                    }
-                    
-                    configuration.Save();
-                    moduleManager.ApplyConfigurationChanges(configuration);
-                    ImGui.CloseCurrentPopup();
-                    moduleToDisable = string.Empty;
-                    affectedDependents.Clear();
-                }
-                
-                ImGui.SameLine();
-                
-                if (ImGui.Button("Cancel", new Vector2(buttonWidth, 0)))
-                {
-                    ImGui.CloseCurrentPopup();
-                    moduleToDisable = string.Empty;
-                    affectedDependents.Clear();
-                }
-            }
-        }
-        
-        // Dependency error popup for enabling
-        using var popup = ImRaii.Popup("EnableDependencyError");
-        if (popup)
-        {
-            ImGui.Text("Cannot enable this module because its dependencies are not enabled.");
-            ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), "Please enable the required dependencies first.");
-                
-            if (ImGui.Button("OK"))
-            {
-                ImGui.CloseCurrentPopup();
-            }
-        }
     }
     
     private void DrawModuleConfiguration(IModule module)
@@ -445,8 +342,8 @@ public class ConfigurationWindow : Window, IDisposable
                     ImGui.OpenPopup($"Save{module.Name}Confirmation");
                 }
 
-                using var popup = ImRaii.Popup($"Save{module.Name}Confirmation");
-                if (popup)
+                using var savePopup = ImRaii.Popup($"Save{module.Name}Confirmation");
+                if (savePopup)
                 {
                     ImGui.Text($"{module.Name} settings saved!");
                     if (ImGui.Button("OK"))
@@ -455,7 +352,7 @@ public class ConfigurationWindow : Window, IDisposable
             }
             catch (Exception ex)
             {
-                ImGui.TextColored(new Vector4(1, 0, 0, 1), $"Error drawing module configuration: {ex.Message}");
+                ImGui.TextColored(LayoutHelpers.Colors.Error, $"Error drawing module configuration: {ex.Message}");
             }
         }
     }
