@@ -1,321 +1,273 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using FluentAssertions;
+using System.Threading.Tasks;
+using Dalamud.Game.Text;
+using Microsoft.Extensions.DependencyInjection;
+using SamplePlugin.Core.MVU;
 using SamplePlugin.Modules.Chat;
 using SamplePlugin.Modules.Chat.Models;
 using Xunit;
-using Dalamud.Game.Text;
 
 namespace SamplePlugin.Tests.Modules.Chat;
 
 public class ChatViewModelTests : IDisposable
 {
+    private readonly IServiceProvider serviceProvider;
+    private readonly IStore<ChatState> store;
     private readonly ChatViewModel viewModel;
-    private readonly ChatModuleConfiguration configuration;
     
     public ChatViewModelTests()
     {
-        viewModel = new ChatViewModel();
-        configuration = new ChatModuleConfiguration();
-        viewModel.Initialize(configuration);
-    }
-
-    [Fact]
-    public void AddMessage_ShouldAddMessageToCollection()
-    {
-        // Arrange
-        var message = new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Sender = "Player",
-            Message = "Hello World",
-            Timestamp = DateTime.Now
-        };
+        var services = new ServiceCollection();
         
-        // Act
-        viewModel.AddMessage(message);
+        var initialState = ChatState.Initial;
+        store = new Store<ChatState>(initialState, ChatUpdate.Update);
         
-        // Assert
-        viewModel.Messages.Should().ContainSingle()
-            .Which.Message.Should().Be("Hello World");
+        services.AddSingleton(store);
+        services.AddSingleton<ChatViewModel>();
+        
+        serviceProvider = services.BuildServiceProvider();
+        viewModel = serviceProvider.GetRequiredService<ChatViewModel>();
     }
     
     [Fact]
-    public void AddMessage_WithFilteredChannel_ShouldNotShowMessage()
+    public void Constructor_InitializesWithCorrectDefaults()
     {
-        // Arrange
-        viewModel.ToggleChannel(XivChatType.Say); // Disable Say channel
-        
-        var message = new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Sender = "Player",
-            Message = "Should not appear",
-            Timestamp = DateTime.Now
-        };
-        
-        // Act
-        viewModel.AddMessage(message);
-        
-        // Assert
-        viewModel.Messages.Should().BeEmpty();
+        Assert.NotNull(viewModel.Messages);
+        Assert.Empty(viewModel.Messages);
+        Assert.Equal(1000, viewModel.MaxMessages);
+        Assert.True(viewModel.AutoScroll);
+        Assert.True(viewModel.ShowTimestamps);
     }
     
     [Fact]
-    public void AddMessage_ExceedingMaxMessages_ShouldRemoveOldest()
+    public void Messages_UpdatesWhenStateChanges()
     {
-        // Arrange
-        var config = new ChatModuleConfiguration { MaxMessages = 3 };
-        viewModel.Initialize(config);
-        
-        // Act
-        for (var i = 1; i <= 5; i++)
+        store.Dispatch(new AddMessageAction(new ChatMessage
         {
-            viewModel.AddMessage(new ChatMessage
+            Type = XivChatType.Say,
+            Timestamp = DateTime.Now,
+            Sender = "TestSender",
+            Message = "Test message"
+        }));
+        
+        Assert.Single(viewModel.Messages);
+        Assert.Equal("TestSender", viewModel.Messages[0].Sender);
+    }
+    
+    [Fact]
+    public async Task ProcessAction_SetFilter_UpdatesFilter()
+    {
+        const string testFilter = "test";
+        
+        viewModel.ProcessAction(new SetFilterAction(testFilter));
+        
+        await Task.Delay(400);
+        
+        Assert.Equal(testFilter, store.State.Filter);
+    }
+    
+    [Fact]
+    public async Task Messages_FiltersCorrectly()
+    {
+        store.Dispatch(new AddMessageAction(new ChatMessage
+        {
+            Type = XivChatType.Say,
+            Timestamp = DateTime.Now,
+            Sender = "Player1",
+            Message = "Hello world"
+        }));
+        
+        store.Dispatch(new AddMessageAction(new ChatMessage
+        {
+            Type = XivChatType.Say,
+            Timestamp = DateTime.Now,
+            Sender = "Player2",
+            Message = "Goodbye world"
+        }));
+        
+        viewModel.SetFilter("Hello");
+        await Task.Delay(400);
+        
+        Assert.Single(viewModel.Messages);
+        Assert.Contains("Hello", viewModel.Messages[0].Message);
+    }
+    
+    [Fact]
+    public void Messages_RespectsMaxMessages()
+    {
+        // Set max messages to minimum allowed value (100)
+        store.Dispatch(new UpdateMaxMessagesAction(100));
+        Assert.Equal(100, store.State.MaxMessages);
+        
+        // Add 105 messages
+        for (var i = 0; i < 105; i++)
+        {
+            store.Dispatch(new AddMessageAction(new ChatMessage
             {
                 Type = XivChatType.Say,
-                Message = $"Message {i}",
-                Sender = "Player",
-                Timestamp = DateTime.Now
-            });
+                Timestamp = DateTime.Now,
+                Sender = $"Player{i}",
+                Message = $"Message {i}"
+            }));
         }
         
-        // Assert
-        viewModel.Messages.Should().HaveCount(3);
-        viewModel.Messages.Select(m => m.Message)
-            .Should().ContainInOrder("Message 3", "Message 4", "Message 5");
+        // Check that the state has the correct number of messages (max 100)
+        Assert.Equal(100, store.State.Messages.Count);
+        // Check that the viewModel also reflects this
+        Assert.Equal(100, viewModel.Messages.Count);
+        // Check that we kept the last 100 messages (5-104)
+        Assert.Equal("Player5", viewModel.Messages[0].Sender);
+        Assert.Equal("Player104", viewModel.Messages[99].Sender);
     }
     
     [Fact]
-    public void SetFilter_ShouldFilterMessages()
+    public void ProcessAction_ClearMessages_ClearsAllMessages()
     {
-        // Arrange
-        viewModel.AddMessage(new ChatMessage
+        store.Dispatch(new AddMessageAction(new ChatMessage
         {
             Type = XivChatType.Say,
-            Message = "Hello world",
+            Timestamp = DateTime.Now,
+            Sender = "TestSender",
+            Message = "Test"
+        }));
+        
+        Assert.Single(viewModel.Messages);
+        
+        viewModel.ProcessAction(new ClearMessagesAction());
+        
+        Assert.Empty(viewModel.Messages);
+    }
+    
+    [Fact]
+    public void ProcessAction_ToggleChannel_UpdatesChannelState()
+    {
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Say));
+        
+        viewModel.ProcessAction(new ToggleChannelAction(XivChatType.Say));
+        
+        Assert.False(viewModel.IsChannelEnabled(XivChatType.Say));
+        
+        viewModel.ProcessAction(new ToggleChannelAction(XivChatType.Say));
+        
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Say));
+    }
+    
+    [Fact]
+    public void ProcessAction_UpdateMaxMessages_UpdatesMaxMessages()
+    {
+        Assert.Equal(1000, viewModel.MaxMessages);
+        
+        viewModel.ProcessAction(new UpdateMaxMessagesAction(500));
+        
+        Assert.Equal(500, viewModel.MaxMessages);
+    }
+    
+    [Fact]
+    public void ProcessAction_UpdateAutoScroll_UpdatesAutoScroll()
+    {
+        var initial = viewModel.AutoScroll;
+        
+        viewModel.ProcessAction(new UpdateAutoScrollAction(!initial));
+        
+        Assert.NotEqual(initial, viewModel.AutoScroll);
+    }
+    
+    [Fact]
+    public void ProcessAction_UpdateShowTimestamps_UpdatesShowTimestamps()
+    {
+        var initial = viewModel.ShowTimestamps;
+        
+        viewModel.ProcessAction(new UpdateShowTimestampsAction(!initial));
+        
+        Assert.NotEqual(initial, viewModel.ShowTimestamps);
+    }
+    
+    [Fact]
+    public void ProcessAction_ResetChannelFilters_ResetsToDefaults()
+    {
+        viewModel.ProcessAction(new ToggleChannelAction(XivChatType.Say));
+        viewModel.ProcessAction(new ToggleChannelAction(XivChatType.Shout));
+        
+        Assert.False(viewModel.IsChannelEnabled(XivChatType.Say));
+        Assert.False(viewModel.IsChannelEnabled(XivChatType.Shout));
+        
+        viewModel.ProcessAction(new ResetChannelFiltersAction());
+        
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Say));
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Shout));
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Party));
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Alliance));
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.FreeCompany));
+    }
+    
+    [Fact]
+    public void Messages_FiltersChannelsCorrectly()
+    {
+        store.Dispatch(new LoadConfigurationAction(new ChatModuleConfiguration
+        {
+            EnabledChannels = [XivChatType.Say]
+        }));
+        
+        store.Dispatch(new AddMessageAction(new ChatMessage
+        {
+            Type = XivChatType.Say,
+            Timestamp = DateTime.Now,
             Sender = "Player1",
-            Timestamp = DateTime.Now
-        });
+            Message = "Say message"
+        }));
         
-        viewModel.AddMessage(new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Message = "Goodbye",
-            Sender = "Player2",
-            Timestamp = DateTime.Now
-        });
-        
-        // Act
-        viewModel.SetFilter("Hello");
-        Thread.Sleep(400); // Wait for throttle
-        
-        // Assert
-        viewModel.Messages.Should().ContainSingle()
-            .Which.Message.Should().Be("Hello world");
-    }
-    
-    [Fact]
-    public void SetFilter_BySender_ShouldFilterCorrectly()
-    {
-        // Arrange
-        viewModel.AddMessage(new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Message = "Message 1",
-            Sender = "Alice",
-            Timestamp = DateTime.Now
-        });
-        
-        viewModel.AddMessage(new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Message = "Message 2",
-            Sender = "Bob",
-            Timestamp = DateTime.Now
-        });
-        
-        // Act
-        viewModel.SetFilter("Alice");
-        Thread.Sleep(400); // Wait for throttle
-        
-        // Assert
-        viewModel.Messages.Should().ContainSingle()
-            .Which.Sender.Should().Be("Alice");
-    }
-    
-    [Fact]
-    public void SetFilter_CaseInsensitive_ShouldWork()
-    {
-        // Arrange
-        viewModel.AddMessage(new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Message = "HELLO WORLD",
-            Sender = "Player",
-            Timestamp = DateTime.Now
-        });
-        
-        // Act
-        viewModel.SetFilter("hello");
-        Thread.Sleep(400); // Wait for throttle
-        
-        // Assert
-        viewModel.Messages.Should().ContainSingle();
-    }
-    
-    [Fact]
-    public void ToggleChannel_ShouldEnableAndDisable()
-    {
-        // Arrange & Act
-        var initialState = viewModel.EnabledChannels.Contains(XivChatType.Say);
-        viewModel.ToggleChannel(XivChatType.Say);
-        var afterFirstToggle = viewModel.EnabledChannels.Contains(XivChatType.Say);
-        viewModel.ToggleChannel(XivChatType.Say);
-        var afterSecondToggle = viewModel.EnabledChannels.Contains(XivChatType.Say);
-        
-        // Assert
-        initialState.Should().BeTrue();
-        afterFirstToggle.Should().BeFalse();
-        afterSecondToggle.Should().BeTrue();
-    }
-    
-    [Fact]
-    public void ToggleChannel_ShouldFilterExistingMessages()
-    {
-        // Arrange
-        viewModel.AddMessage(new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Message = "Say message",
-            Sender = "Player",
-            Timestamp = DateTime.Now
-        });
-        
-        viewModel.AddMessage(new ChatMessage
+        store.Dispatch(new AddMessageAction(new ChatMessage
         {
             Type = XivChatType.Shout,
-            Message = "Shout message",
-            Sender = "Player",
-            Timestamp = DateTime.Now
-        });
+            Timestamp = DateTime.Now,
+            Sender = "Player2",
+            Message = "Shout message"
+        }));
         
-        // Act
-        viewModel.ToggleChannel(XivChatType.Say);
-        Thread.Sleep(400); // Wait for throttle (300 ms) to apply
-        
-        // Assert
-        viewModel.Messages.Should().ContainSingle()
-            .Which.Type.Should().Be(XivChatType.Shout);
+        Assert.Single(viewModel.Messages);
+        Assert.Equal(XivChatType.Say, viewModel.Messages[0].Type);
     }
     
     [Fact]
-    public void ClearMessages_ShouldRemoveAllMessages()
+    public void ProcessAction_MultipleActionsInSequence()
     {
-        // Arrange
-        for (var i = 0; i < 5; i++)
-        {
-            viewModel.AddMessage(new ChatMessage
-            {
-                Type = XivChatType.Say,
-                Message = $"Message {i}",
-                Sender = "Player",
-                Timestamp = DateTime.Now
-            });
-        }
+        viewModel.ProcessAction(new UpdateMaxMessagesAction(100));
+        viewModel.ProcessAction(new UpdateAutoScrollAction(false));
+        viewModel.ProcessAction(new UpdateShowTimestampsAction(false));
         
-        // Act
-        viewModel.ClearMessages();
-        
-        // Assert
-        viewModel.Messages.Should().BeEmpty();
+        Assert.Equal(100, viewModel.MaxMessages);
+        Assert.False(viewModel.AutoScroll);
+        Assert.False(viewModel.ShowTimestamps);
     }
     
     [Fact]
-    public void NewMessage_Observable_ShouldEmitAddedMessages()
+    public void StateChanges_UpdateViewModelProperties()
     {
-        // Arrange
-        var receivedMessages = new List<ChatMessage>();
-        using var subscription = viewModel.NewMessage.Subscribe(msg => receivedMessages.Add(msg));
-        
-        var message = new ChatMessage
+        var config = new ChatModuleConfiguration
         {
-            Type = XivChatType.Say,
-            Message = "Test",
-            Sender = "Player",
-            Timestamp = DateTime.Now
+            MaxMessages = 250,
+            AutoScroll = false,
+            ShowTimestamps = false,
+            EnabledChannels = [XivChatType.Party]
         };
         
-        // Act
-        viewModel.AddMessage(message);
+        store.Dispatch(new LoadConfigurationAction(config));
         
-        // Assert
-        receivedMessages.Should().ContainSingle()
-            .Which.Message.Should().Be("Test");
-    }
-    
-    [Fact]
-    public void Filter_Observable_ShouldEmitFilterChanges()
-    {
-        // Arrange
-        var receivedFilters = new List<string>();
-        using var subscription = viewModel.Filter.Subscribe(f => receivedFilters.Add(f));
-        
-        // Act
-        viewModel.SetFilter("test");
-        
-        // Assert
-        receivedFilters.Should().Contain("test");
-    }
-    
-    [Fact]
-    public void DefaultEnabledChannels_ShouldIncludeCommonChannels()
-    {
-        // Assert
-        viewModel.EnabledChannels.Should().Contain([
-            XivChatType.Say,
-            XivChatType.Shout,
-            XivChatType.Party,
-            XivChatType.FreeCompany,
-            XivChatType.TellIncoming,
-            XivChatType.TellOutgoing
-        ]);
-    }
-    
-    [Fact]
-    public void MaxMessages_DefaultValue_ShouldBe1000()
-    {
-        // Assert
-        viewModel.MaxMessages.Should().Be(1000);
-    }
-    
-    [Fact]
-    public void Dispose_ShouldCleanupResources()
-    {
-        // Arrange
-        var subscription = viewModel.NewMessage.Subscribe(_ => { });
-        
-        // Act
-        viewModel.Dispose();
-        subscription.Dispose();
-        
-        // Assert - Should not throw when trying to add a message after dispose
-        var action = () => viewModel.AddMessage(new ChatMessage
-        {
-            Type = XivChatType.Say,
-            Message = "Test",
-            Sender = "Player",
-            Timestamp = DateTime.Now
-        });
-        
-        action.Should().Throw<ObjectDisposedException>();
+        Assert.Equal(250, viewModel.MaxMessages);
+        Assert.False(viewModel.AutoScroll);
+        Assert.False(viewModel.ShowTimestamps);
+        Assert.True(viewModel.IsChannelEnabled(XivChatType.Party));
+        Assert.False(viewModel.IsChannelEnabled(XivChatType.Say));
     }
     
     public void Dispose()
     {
         viewModel?.Dispose();
+        (store as IDisposable)?.Dispose();
+        
+        if (serviceProvider is IDisposable disposable)
+            disposable.Dispose();
+            
         GC.SuppressFinalize(this);
     }
 }

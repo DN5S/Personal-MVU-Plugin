@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Extensions.DependencyInjection;
 using SamplePlugin.Core.Module;
+using SamplePlugin.Core.MVU;
 using SamplePlugin.Modules.Chat.Models;
 using Dalamud.Plugin.Services;
 using Dalamud.Game.Text;
@@ -12,6 +13,7 @@ public class ChatModule : ModuleBase
 {
     private ChatWindow? window;
     private ChatViewModel? viewModel;
+    private Store<ChatState>? store;
     private IChatGui? chatGui;
     private ChatModuleConfiguration? moduleConfig;
     
@@ -20,6 +22,24 @@ public class ChatModule : ModuleBase
     
     public override void RegisterServices(IServiceCollection services)
     {
+        services.AddSingleton<IStore<ChatState>>(_ =>
+        {
+            var initialState = ChatState.Initial;
+            store = new Store<ChatState>(initialState, ChatUpdate.Update);
+            
+            store.RegisterEffectHandler(new SaveConfigurationEffectHandler(SetModuleConfig));
+            store.RegisterEffectHandler(new NotifyConfigurationChangedEffectHandler(EventBus));
+
+            store.UseMiddleware(async (state, action, next) =>
+            {
+                Logger.Debug($"Action dispatched: {action.Type}");
+                await next();
+                Logger.Debug($"State updated: Version {state.Version}");
+            });
+
+            return store;
+        });
+        
         services.AddSingleton<ChatViewModel>();
     }
     
@@ -31,20 +51,16 @@ public class ChatModule : ModuleBase
     public override void Initialize()
     {
         chatGui = Services.GetRequiredService<IChatGui>();
+        store = (Store<ChatState>)Services.GetRequiredService<IStore<ChatState>>();
         viewModel = Services.GetRequiredService<ChatViewModel>();
         
-        // Initialize ViewModel with configuration
-        viewModel.Initialize(moduleConfig!);
+        store.Dispatch(new LoadConfigurationAction(moduleConfig!));
         
-        window = new ChatWindow(viewModel, moduleConfig!, () => 
-        {
-            SetModuleConfig(moduleConfig!);
-        });
+        window = new ChatWindow(viewModel);
         
-        // Hook into Dalamud's chat
         chatGui.ChatMessage += OnChatMessage;
         
-        Logger.Information("Chat module initialized");
+        Logger.Information("Chat module initialized with MVU pattern");
     }
     
     private void OnChatMessage(XivChatType type, int timestamp, ref Dalamud.Game.Text.SeStringHandling.SeString sender, ref Dalamud.Game.Text.SeStringHandling.SeString message, ref bool isHandled)
@@ -57,9 +73,8 @@ public class ChatModule : ModuleBase
             Message = message.TextValue
         };
         
-        viewModel?.AddMessage(chatMessage);
+        store?.Dispatch(new AddMessageAction(chatMessage));
         
-        // Publish to EventBus for other modules
         EventBus.Publish(new ChatMessageReceived(chatMessage));
     }
     
@@ -81,6 +96,8 @@ public class ChatModule : ModuleBase
         }
         
         window?.Dispose();
+        viewModel?.Dispose();
+        store?.Dispose();
         base.Dispose();
         GC.SuppressFinalize(this);
     }

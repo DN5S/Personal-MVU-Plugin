@@ -4,6 +4,7 @@ using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.Utility.Raii;
 using SamplePlugin.Core.UI;
+using SamplePlugin.Modules.Chat.Models;
 using Dalamud.Game.Text;
 using Dalamud.Bindings.ImGui;
 
@@ -12,16 +13,12 @@ namespace SamplePlugin.Modules.Chat;
 public class ChatWindow : Window, IDisposable
 {
     private readonly ChatViewModel viewModel;
-    private readonly ChatModuleConfiguration configuration;
-    private readonly Action saveConfiguration;
     private string filterText = string.Empty;
     
-    public ChatWindow(ChatViewModel viewModel, ChatModuleConfiguration configuration, Action saveConfiguration) 
+    public ChatWindow(ChatViewModel viewModel)
         : base("Chat Monitor###ChatMonitor", ImGuiWindowFlags.None)
     {
         this.viewModel = viewModel;
-        this.configuration = configuration;
-        this.saveConfiguration = saveConfiguration;
 
         Size = new Vector2(600, 400);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -40,7 +37,7 @@ public class ChatWindow : Window, IDisposable
         ImGui.SetNextItemWidth(200f);
         if (ImGui.InputTextWithHint("##ChatFilter", "Filter messages...", ref filterText, 256))
         {
-            viewModel.SetFilter(filterText);
+            viewModel.ProcessAction(new SetFilterAction(filterText));
         }
         
         ImGui.SameLine();
@@ -60,11 +57,10 @@ public class ChatWindow : Window, IDisposable
         ImGui.SameLine();
         
         // Auto-scroll toggle
-        var autoScroll = configuration.AutoScroll;
+        var autoScroll = viewModel.AutoScroll;
         if (ImGui.Checkbox("Auto-scroll", ref autoScroll))
         {
-            configuration.AutoScroll = autoScroll;
-            saveConfiguration();
+            viewModel.ProcessAction(new UpdateAutoScrollAction(autoScroll));
         }
         
         ImGui.SameLine();
@@ -72,7 +68,7 @@ public class ChatWindow : Window, IDisposable
         // Clear button
         if (ImGui.Button("Clear"))
         {
-            viewModel.ClearMessages();
+            viewModel.ProcessAction(new ClearMessagesAction());
         }
         
         ImGui.SameLine();
@@ -88,10 +84,10 @@ public class ChatWindow : Window, IDisposable
         
         foreach (var channel in allChannels)
         {
-            var isEnabled = viewModel.EnabledChannels.Contains(channel);
+            var isEnabled = viewModel.IsChannelEnabled(channel);
             if (ImGui.Checkbox(channel.ToString(), ref isEnabled))
             {
-                viewModel.ToggleChannel(channel);
+                viewModel.ProcessAction(new ToggleChannelAction(channel));
             }
         }
     }
@@ -121,7 +117,7 @@ public class ChatWindow : Window, IDisposable
             ImGui.TableNextRow();
             
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(configuration.ShowTimestamps ? message.Timestamp.ToString("HH:mm:ss") : "");
+            ImGui.TextUnformatted(viewModel.ShowTimestamps ? message.Timestamp.ToString("HH:mm:ss") : "");
 
             ImGui.TableNextColumn();
             using (ImRaii.PushColor(ImGuiCol.Text, GetChannelColor(message.Type)))
@@ -136,7 +132,7 @@ public class ChatWindow : Window, IDisposable
             ImGui.TextWrapped(message.Message);
         }
         
-        if (configuration.AutoScroll && ImGui.GetScrollY() >= ImGui.GetScrollMaxY())
+        if (viewModel.AutoScroll && ImGui.GetScrollY() >= ImGui.GetScrollMaxY())
         {
             ImGui.SetScrollHereY(1.0f);
         }
@@ -186,32 +182,26 @@ public class ChatWindow : Window, IDisposable
         ImGui.Text("Chat Monitor Configuration");
         ImGui.Separator();
         
-        var maxMessages = configuration.MaxMessages;
+        var maxMessages = viewModel.MaxMessages;
         if (ImGui.InputInt("Max Messages", ref maxMessages, 100, 1000))
         {
-            configuration.MaxMessages = Math.Clamp(maxMessages, 100, 10000);
-            viewModel.UpdateConfiguration(configuration.MaxMessages, configuration.AutoScroll, configuration.ShowTimestamps);
-            saveConfiguration();
+            viewModel.ProcessAction(new UpdateMaxMessagesAction(Math.Clamp(maxMessages, 100, 10000)));
         }
         LayoutHelpers.HelpTooltip("Maximum number of messages to keep in memory");
         
         ImGui.Spacing();
         
-        var showTimestamps = configuration.ShowTimestamps;
+        var showTimestamps = viewModel.ShowTimestamps;
         if (ImGui.Checkbox("Show Timestamps", ref showTimestamps))
         {
-            configuration.ShowTimestamps = showTimestamps;
-            viewModel.UpdateConfiguration(configuration.MaxMessages, configuration.AutoScroll, configuration.ShowTimestamps);
-            saveConfiguration();
+            viewModel.ProcessAction(new UpdateShowTimestampsAction(showTimestamps));
         }
         LayoutHelpers.HelpTooltip("Display timestamps for each message");
         
-        var autoScrollConfig = configuration.AutoScroll;
+        var autoScrollConfig = viewModel.AutoScroll;
         if (ImGui.Checkbox("Auto-scroll", ref autoScrollConfig))
         {
-            configuration.AutoScroll = autoScrollConfig;
-            viewModel.UpdateConfiguration(configuration.MaxMessages, configuration.AutoScroll, configuration.ShowTimestamps);
-            saveConfiguration();
+            viewModel.ProcessAction(new UpdateAutoScrollAction(autoScrollConfig));
         }
         LayoutHelpers.HelpTooltip("Automatically scroll to new messages");
         
@@ -221,9 +211,7 @@ public class ChatWindow : Window, IDisposable
         
         if (ImGui.Button("Reset Channel Filters"))
         {
-            configuration.ResetChannels();
-            viewModel.Initialize(configuration); // Re-initialize with default channels
-            saveConfiguration();
+            viewModel.ProcessAction(new ResetChannelFiltersAction());
         }
         LayoutHelpers.HelpTooltip("Reset channel filters to defaults");
     }

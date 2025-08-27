@@ -1,82 +1,54 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using SamplePlugin.Modules.Chat.Models;
 using Dalamud.Game.Text;
+using SamplePlugin.Core.MVU;
+using SamplePlugin.Modules.Chat.Models;
 
 namespace SamplePlugin.Modules.Chat;
 
 public class ChatViewModel : IDisposable
 {
+    private readonly IStore<ChatState> store;
     private readonly BehaviorSubject<string> filterSubject = new(string.Empty);
-    private BehaviorSubject<HashSet<XivChatType>>? enabledChannelsSubject;
-    private readonly Subject<ChatMessage> newMessageSubject = new();
-    private readonly ObservableCollection<ChatMessage> allMessages = [];
+    private IDisposable? stateSubscription;
     private IDisposable? filterSubscription;
-    private ChatModuleConfiguration? configuration;
     
     public ObservableCollection<ChatMessage> Messages { get; } = [];
 
     public IObservable<string> Filter => filterSubject.AsObservable();
-    public IObservable<ChatMessage> NewMessage => newMessageSubject.AsObservable();
     
-    public int MaxMessages => configuration?.MaxMessages ?? 1000;
-    public HashSet<XivChatType> EnabledChannels => enabledChannelsSubject?.Value ?? [];
-
-    public void Initialize(ChatModuleConfiguration config)
-    {
-        configuration = config;
-        
-        // Initialize with configuration values
-        enabledChannelsSubject = new BehaviorSubject<HashSet<XivChatType>>(
-            config.EnabledChannels);
-        
-        // Setup filter subscription
-        filterSubscription = filterSubject.Throttle(TimeSpan.FromMilliseconds(300))
-                                          .CombineLatest(enabledChannelsSubject, (filter, channels) 
-                                                             => (filter, channels))
-                                          .Subscribe(tuple => ApplyFilter(tuple.filter, tuple.channels));
-    }
+    public int MaxMessages => store.State.MaxMessages;
+    public bool AutoScroll => store.State.AutoScroll;
+    public bool ShowTimestamps => store.State.ShowTimestamps;
+    public bool IsChannelEnabled(XivChatType channel) => store.State.EnabledChannels.Contains(channel);
     
-    public void UpdateConfiguration(int maxMessages, bool autoScroll, bool showTimestamps)
+    public ChatViewModel(IStore<ChatState> chatStore)
     {
-        if (configuration != null)
-        {
-            configuration.MaxMessages = maxMessages;
-            configuration.AutoScroll = autoScroll;
-            configuration.ShowTimestamps = showTimestamps;
+        store = chatStore;
+        
+        stateSubscription = store.StateChanged
+            .Subscribe(OnStateChanged);
             
-            // Trim messages if max was reduced
-            while (allMessages.Count > maxMessages)
-            {
-                var oldMessage = allMessages[0];
-                allMessages.RemoveAt(0);
-                Messages.Remove(oldMessage);
-            }
-        }
+        filterSubscription = filterSubject
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .Subscribe(filter => store.Dispatch(new SetFilterAction(filter)));
+            
+        UpdateMessages(store.State);
     }
     
-    public void AddMessage(ChatMessage message)
+    public void ProcessAction(IAction action)
     {
-        allMessages.Add(message);
-        
-        while (allMessages.Count > MaxMessages)
+        if (action is SetFilterAction setFilter)
         {
-            var oldMessage = allMessages[0];
-            allMessages.RemoveAt(0);
-            Messages.Remove(oldMessage);
+            filterSubject.OnNext(setFilter.FilterText);
         }
-        
-        // Check if a message should be shown
-        if (enabledChannelsSubject != null && ShouldShowMessage(message, filterSubject.Value, enabledChannelsSubject.Value))
+        else
         {
-            Messages.Add(message);
+            store.Dispatch(action);
         }
-        
-        newMessageSubject.OnNext(message);
     }
     
     public void SetFilter(string filter)
@@ -84,57 +56,26 @@ public class ChatViewModel : IDisposable
         filterSubject.OnNext(filter);
     }
     
-    public void ToggleChannel(XivChatType channel)
+    private void OnStateChanged(ChatState state)
     {
-        if (enabledChannelsSubject == null) return;
-        
-        var channels = new HashSet<XivChatType>(enabledChannelsSubject.Value);
-        if (!channels.Add(channel))
-            channels.Remove(channel);
-
-        enabledChannelsSubject.OnNext(channels);
-        
-        // Update configuration
-        if (configuration != null)
-        {
-            configuration.EnabledChannels = channels;
-        }
+        UpdateMessages(state);
     }
     
-    public void ClearMessages()
-    {
-        allMessages.Clear();
-        Messages.Clear();
-    }
-    
-    private void ApplyFilter(string filter, HashSet<XivChatType> channels)
+    private void UpdateMessages(ChatState state)
     {
         Messages.Clear();
-        
-        foreach (var message in allMessages.Where(m => ShouldShowMessage(m, filter, channels)))
+        var messagesToDisplay = state.FilteredMessages.TakeLast(state.MaxMessages);
+        foreach (var message in messagesToDisplay)
         {
             Messages.Add(message);
         }
     }
     
-    private static bool ShouldShowMessage(ChatMessage message, string filter, HashSet<XivChatType> channels)
-    {
-        if (!channels.Contains(message.Type))
-            return false;
-        
-        if (string.IsNullOrEmpty(filter))
-            return true;
-        
-        return message.Message.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-               message.Sender.Contains(filter, StringComparison.OrdinalIgnoreCase);
-    }
-    
     public void Dispose()
     {
+        stateSubscription?.Dispose();
         filterSubscription?.Dispose();
         filterSubject.Dispose();
-        enabledChannelsSubject?.Dispose();
-        newMessageSubject.Dispose();
         GC.SuppressFinalize(this);
     }
 }
