@@ -58,17 +58,18 @@ public class ConfigurationWindow : Window, IDisposable
         ImGui.Text("General Plugin Settings");
         ImGui.Separator();
         
-        using (LayoutHelpers.BeginSection("Plugin Information"))
+        if (LayoutHelpers.BeginSection("Plugin Information"))
         {
             ImGui.Text("Sample Plugin - Modular Architecture Template");
             ImGui.TextDisabled("A template for creating modular Dalamud plugins");
             ImGui.Spacing();
             ImGui.Text($"Configuration Version: {configuration.Version}");
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();
         
-        using (LayoutHelpers.BeginSection("Configuration Management"))
+        if (LayoutHelpers.BeginSection("Configuration Management"))
         {
             if (ImGui.Button("Save Configuration"))
             {
@@ -98,6 +99,7 @@ public class ConfigurationWindow : Window, IDisposable
                 // Import logic would go here
                 ImGui.OpenPopup("ImportWarning");
             }
+            LayoutHelpers.EndSection();
         }
         
         // Popups
@@ -159,7 +161,7 @@ public class ConfigurationWindow : Window, IDisposable
         ImGui.Text("Module Management");
         ImGui.Separator();
         
-        using (LayoutHelpers.BeginSection("Loaded Modules"))
+        if (LayoutHelpers.BeginSection("Loaded Modules"))
         {
             if (ImGui.BeginTable("ModuleTable", 4, 
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
@@ -218,6 +220,7 @@ public class ConfigurationWindow : Window, IDisposable
                 
                 ImGui.EndTable();
             }
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();
@@ -225,7 +228,7 @@ public class ConfigurationWindow : Window, IDisposable
         // Show selected module details
         if (!string.IsNullOrEmpty(selectedModuleName))
         {
-            using (LayoutHelpers.BeginSection($"Selected Module: {selectedModuleName}"))
+            if (LayoutHelpers.BeginSection($"Selected Module: {selectedModuleName}"))
             {
                 var moduleInfo = moduleManager.GetModuleInfo(selectedModuleName);
                 if (moduleInfo != null)
@@ -244,12 +247,13 @@ public class ConfigurationWindow : Window, IDisposable
                         selectedModuleName = string.Empty;
                     }
                 }
+                LayoutHelpers.EndSection();
             }
             
             ImGui.Spacing();
         }
         
-        using (LayoutHelpers.BeginSection("Module Dependencies"))
+        if (LayoutHelpers.BeginSection("Module Dependencies"))
         {
             ImGui.TextWrapped("Some modules depend on others. Disabling a module will also disable " +
                             "all modules that depend on it.");
@@ -263,6 +267,7 @@ public class ConfigurationWindow : Window, IDisposable
                 
                 ImGui.Text($"{module.Name} depends on: {string.Join(", ", module.Dependencies)}");
             }
+            LayoutHelpers.EndSection();
         }
     }
     

@@ -5,7 +5,6 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using SamplePlugin.Core.Reactive;
 using SamplePlugin.Core.Configuration;
 
@@ -49,35 +48,24 @@ public class ModuleManager(IServiceProvider globalServices, IPluginLog logger) :
             
             var services = new ServiceCollection();
             
-            // Properly copy global services with their implementations
-            var globalServiceDescriptors = ((ServiceProvider)globalServices).GetService<IServiceCollection>();
-            if (globalServiceDescriptors != null)
-            {
-                foreach (var descriptor in globalServiceDescriptors)
-                {
-                    services.Add(descriptor);
-                }
-            }
-            else
-            {
-                // Fallback: Register known services manually
-                services.AddSingleton(globalServices);
-                services.AddSingleton(globalServices.GetRequiredService<IPluginLog>());
-                services.AddSingleton(globalServices.GetRequiredService<EventBus>());
-                
-                // Register optional services if they exist
-                var pluginInterface = globalServices.GetService<IDalamudPluginInterface>();
-                if (pluginInterface != null) services.AddSingleton(pluginInterface);
-                
-                var commandManager = globalServices.GetService<ICommandManager>();
-                if (commandManager != null) services.AddSingleton(commandManager);
-                
-                var chatGui = globalServices.GetService<IChatGui>();
-                if (chatGui != null) services.AddSingleton(chatGui);
-                
-                var windowSystem = globalServices.GetService<WindowSystem>();
-                if (windowSystem != null) services.AddSingleton(windowSystem);
-            }
+            // Register known services from the global service provider
+            services.AddSingleton(globalServices);
+            services.AddSingleton(globalServices.GetRequiredService<IPluginLog>());
+            services.AddSingleton(globalServices.GetRequiredService<EventBus>());
+            services.AddSingleton(globalServices.GetRequiredService<PluginConfiguration>());
+            
+            // Register optional services if they exist
+            var pluginInterface = globalServices.GetService<IDalamudPluginInterface>();
+            if (pluginInterface != null) services.AddSingleton(pluginInterface);
+            
+            var commandManager = globalServices.GetService<ICommandManager>();
+            if (commandManager != null) services.AddSingleton(commandManager);
+            
+            var chatGui = globalServices.GetService<IChatGui>();
+            if (chatGui != null) services.AddSingleton(chatGui);
+            
+            var windowSystem = globalServices.GetService<WindowSystem>();
+            if (windowSystem != null) services.AddSingleton(windowSystem);
             
             module.RegisterServices(services);
             

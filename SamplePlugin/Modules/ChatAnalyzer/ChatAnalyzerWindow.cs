@@ -31,16 +31,17 @@ public class ChatAnalyzerWindow : Window, IDisposable
         ImGui.Separator();
         
         // Summary section
-        using (LayoutHelpers.BeginSection("Summary"))
+        if (LayoutHelpers.BeginSection("Summary"))
         {
             ImGui.Text($"Total Messages Analyzed: {viewModel.TotalMessages}");
             ImGui.Text($"Average Message Length: {viewModel.AverageMessageLength:F1} characters");
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();
         
         // Detailed statistics
-        using (LayoutHelpers.BeginSection("Detailed Statistics"))
+        if (LayoutHelpers.BeginSection("Detailed Statistics"))
         {
             {
                 using var table = ImRaii.Table("StatsTable", 2, 
@@ -66,6 +67,7 @@ public class ChatAnalyzerWindow : Window, IDisposable
                     }
                 }
             }
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();

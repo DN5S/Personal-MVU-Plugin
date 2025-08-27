@@ -48,7 +48,9 @@ public class Store<TState> : IStore<TState>, IDisposable where TState : IState
     
     public void Dispatch(IAction action)
     {
-        Task.Run(() => DispatchAsync(action)).Wait();
+        Task.Run(async () => await DispatchAsync(action).ConfigureAwait(false))
+            .GetAwaiter()
+            .GetResult();
     }
     
     public async Task DispatchAsync(IAction action)
@@ -113,29 +115,41 @@ public class Store<TState> : IStore<TState>, IDisposable where TState : IState
     
     private TState SetVersion(TState state, long newVersion)
     {
-        // Use reflection to create a new instance with updated version
         var type = state.GetType();
         
-        // For record types, we can use the copy constructor via reflection
+        // Try to use record-specific copy constructor for better performance
+        // This is an optimization - if it fails, we fall back to property copying
         if (type.IsRecord())
         {
-            var copyConstructor = type.GetConstructors()
-                .FirstOrDefault(c => c.GetParameters().Length == 1 && 
-                                     c.GetParameters()[0].ParameterType == type);
-            
-            if (copyConstructor != null)
+            try
             {
-                var newState = (TState)copyConstructor.Invoke(new object[] { state });
-                var versionProp = type.GetProperty("Version");
-                if (versionProp != null && versionProp.CanWrite)
+                // Records have a synthesized copy constructor
+                var copyConstructor = type.GetConstructors()
+                    .FirstOrDefault(c => c.GetParameters().Length == 1 && 
+                                         c.GetParameters()[0].ParameterType == type);
+                
+                if (copyConstructor != null)
                 {
-                    versionProp.SetValue(newState, newVersion);
+                    // Use the copy constructor to create a new instance
+                    var newState = (TState)copyConstructor.Invoke(new object[] { state });
+                    
+                    // Update the Version property
+                    var versionProp = type.GetProperty("Version");
+                    if (versionProp?.CanWrite == true)
+                    {
+                        versionProp.SetValue(newState, newVersion);
+                        return newState;
+                    }
                 }
-                return newState;
+            }
+            catch
+            {
+                // If record optimization fails, fall through to general approach
             }
         }
         
-        // Fallback: create new instance and copy all properties
+        // General approach: create new instance and copy all properties
+        // This works for both records and regular classes
         var instance = (TState)Activator.CreateInstance(type)!;
         foreach (var prop in type.GetProperties())
         {

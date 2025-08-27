@@ -45,9 +45,15 @@ public static class LayoutHelpers
         return ImRaii.TabItem(label);
     }
     
-    public static IDisposable BeginSection(string title, bool defaultOpen = true)
+    public static bool BeginSection(string title, bool defaultOpen = true)
     {
-        return ImRaii.TreeNode(title, defaultOpen ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None);
+        var flags = defaultOpen ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None;
+        return ImGui.TreeNodeEx(title, flags);
+    }
+    
+    public static void EndSection()
+    {
+        ImGui.TreePop();
     }
     
     public static IDisposable BeginCard()

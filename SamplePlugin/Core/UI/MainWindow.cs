@@ -153,7 +153,7 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
         
         // Display configuration statistics
-        using (LayoutHelpers.BeginSection("Configuration"))
+        if (LayoutHelpers.BeginSection("Configuration"))
         {
             var allModuleConfigs = configuration.GetAllModuleConfigs();
             var enabledCount = allModuleConfigs.Count(c => c.Value.IsEnabled);
@@ -171,11 +171,12 @@ public class MainWindow : Window, IDisposable
             {
                 ImGui.TextDisabled("Some modules are disabled. Check settings to enable them.");
             }
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();
         
-        using (LayoutHelpers.BeginSection("Loaded Modules"))
+        if (LayoutHelpers.BeginSection("Loaded Modules"))
         {
             if (ImGui.BeginTable("ModuleOverviewTable", 4, 
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
@@ -208,11 +209,12 @@ public class MainWindow : Window, IDisposable
                 
                 ImGui.EndTable();
             }
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();
         
-        using (LayoutHelpers.BeginSection("Statistics"))
+        if (LayoutHelpers.BeginSection("Statistics"))
         {
             ImGui.Text($"Total Modules Loaded: {moduleManager.LoadedModules.Count}");
             
@@ -225,6 +227,7 @@ public class MainWindow : Window, IDisposable
             }
             
             ImGui.Text($"Modules with Dependencies: {modulesWithDeps}");
+            LayoutHelpers.EndSection();
         }
         
         ImGui.Spacing();
@@ -241,26 +244,24 @@ public class MainWindow : Window, IDisposable
             // This would reload all modules - implementation would go here
             ImGui.OpenPopup("ReloadConfirmation");
         }
-        
-        using (var popup = ImRaii.Popup("ReloadConfirmation"))
+
+        using var popup = ImRaii.Popup("ReloadConfirmation");
+        if (popup)
         {
-            if (popup)
+            ImGui.Text("Are you sure you want to reload all modules?");
+            ImGui.Text("This may cause temporary interruption.");
+                
+            if (ImGui.Button("Yes, Reload"))
             {
-                ImGui.Text("Are you sure you want to reload all modules?");
-                ImGui.Text("This may cause temporary interruption.");
+                // Reload logic would go here
+                ImGui.CloseCurrentPopup();
+            }
                 
-                if (ImGui.Button("Yes, Reload"))
-                {
-                    // Reload logic would go here
-                    ImGui.CloseCurrentPopup();
-                }
+            ImGui.SameLine();
                 
-                ImGui.SameLine();
-                
-                if (ImGui.Button("Cancel"))
-                {
-                    ImGui.CloseCurrentPopup();
-                }
+            if (ImGui.Button("Cancel"))
+            {
+                ImGui.CloseCurrentPopup();
             }
         }
     }
