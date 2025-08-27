@@ -9,7 +9,7 @@ public interface IStore
     Task DispatchAsync(IAction action);
 }
 
-public interface IStore<TState> : IStore where TState : IState
+public interface IStore<out TState> : IStore where TState : IState
 {
     TState State { get; }
     IObservable<TState> StateChanged { get; }

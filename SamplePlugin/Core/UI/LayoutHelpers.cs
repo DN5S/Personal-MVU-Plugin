@@ -10,6 +10,42 @@ namespace SamplePlugin.Core.UI;
 
 public static class LayoutHelpers
 {
+    #region Colors
+    
+    /// <summary>
+    /// Common UI colors for consistent theming
+    /// </summary>
+    public static class Colors
+    {
+        // Status colors
+        public static readonly Vector4 Success = new(0.3f, 1.0f, 0.3f, 1.0f);
+        public static readonly Vector4 Warning = new(1.0f, 0.5f, 0.0f, 1.0f);
+        public static readonly Vector4 Error = new(1.0f, 0.3f, 0.3f, 1.0f);
+        public static readonly Vector4 Info = new(0.3f, 0.8f, 1.0f, 1.0f);
+        
+        // Module status colors
+        public static readonly Vector4 Enabled = Success;
+        public static readonly Vector4 Disabled = new(1.0f, 0.0f, 0.0f, 1.0f);
+        public static readonly Vector4 Pending = new(1.0f, 1.0f, 0.0f, 1.0f);
+        
+        // Text colors
+        public static readonly Vector4 TextDefault = new(1.0f, 1.0f, 1.0f, 1.0f);
+        public static readonly Vector4 TextDisabled = new(0.5f, 0.5f, 0.5f, 1.0f);
+        public static readonly Vector4 TextMuted = new(0.7f, 0.7f, 0.7f, 1.0f);
+        
+        /// <summary>
+        /// Returns a color with modified alpha
+        /// </summary>
+        public static Vector4 WithAlpha(Vector4 color, float alpha)
+        {
+            return color with { W = alpha };
+        }
+    }
+    
+    #endregion
+    
+    #region Layout Containers
+    
     public static IDisposable BeginPanel(string id, Vector2? size = null, bool border = true)
     {
         var disposables = new CompositeDisposable();
@@ -156,6 +192,234 @@ public static class LayoutHelpers
         return ImRaii.PushStyle(style, value);
     }
     
+    #endregion
+    
+    #region Popup Helpers
+    
+    /// <summary>
+    /// Draws a modal confirmation popup with proper RAII handling
+    /// </summary>
+    public static bool DrawModalConfirmation(
+        string popupId,
+        ref bool isOpen,
+        string message,
+        string? warningMessage = null,
+        string confirmText = "Yes",
+        string cancelText = "Cancel",
+        Action? onConfirm = null,
+        Action? onCancel = null,
+        ImGuiWindowFlags windowFlags = ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove)
+    {
+        using var popup = ImRaii.PopupModal(popupId, ref isOpen, windowFlags);
+        if (!popup) return false;
+
+        ImGui.SetWindowSize(new Vector2(400, 0));
+        
+        ImGui.Text(message);
+        
+        if (!string.IsNullOrEmpty(warningMessage))
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(Colors.Warning, warningMessage);
+        }
+        
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        
+        DrawCenteredButtons(
+            (confirmText, () => {
+                onConfirm?.Invoke();
+                ImGui.CloseCurrentPopup();
+            }),
+            (cancelText, () => {
+                onCancel?.Invoke();
+                ImGui.CloseCurrentPopup();
+            })
+        );
+        
+        return true;
+    }
+    
+    /// <summary>
+    /// Draws a list of items in a modal popup with scrolling support
+    /// </summary>
+    public static bool DrawListModal(
+        string popupId,
+        ref bool isOpen,
+        string title,
+        string[] items,
+        string confirmText = "Continue",
+        string cancelText = "Cancel",
+        Action? onConfirm = null,
+        Action? onCancel = null,
+        Vector4? itemColor = null)
+    {
+        var flags = ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove;
+        using var popup = ImRaii.PopupModal(popupId, ref isOpen, flags);
+        if (!popup) return false;
+
+        ImGui.SetWindowSize(new Vector2(400, 0));
+        
+        ImGui.Text(title);
+        ImGui.Spacing();
+        
+        // Create a scrollable list if there are many items
+        var listHeight = Math.Min(items.Length * 25, 150);
+        using (ImRaii.Child("ItemList", new Vector2(0, listHeight), true))
+        {
+            foreach (var item in items)
+            {
+                if (itemColor.HasValue)
+                    ImGui.TextColored(itemColor.Value, $"  • {item}");
+                else
+                    ImGui.Text($"  • {item}");
+            }
+        }
+        
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        
+        DrawCenteredButtons(
+            (confirmText, () => {
+                onConfirm?.Invoke();
+                ImGui.CloseCurrentPopup();
+            }),
+            (cancelText, () => {
+                onCancel?.Invoke();
+                ImGui.CloseCurrentPopup();
+            })
+        );
+        
+        return true;
+    }
+    
+    #endregion
+    
+    #region Common UI Components
+    
+    /// <summary>
+    /// Draws centered buttons in a horizontal layout
+    /// </summary>
+    public static void DrawCenteredButtons(params (string text, Action action)[] buttons)
+    {
+        if (buttons.Length == 0) return;
+        
+        const float buttonWidth = 120f;
+        const float spacing = 10f;
+        
+        var totalWidth = buttonWidth * buttons.Length + spacing * (buttons.Length - 1);
+        var startX = (ImGui.GetContentRegionAvail().X - totalWidth) / 2;
+        
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + startX);
+        
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            if (i > 0) 
+            {
+                ImGui.SameLine();
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() - spacing + spacing);
+            }
+            
+            if (ImGui.Button(buttons[i].text, new Vector2(buttonWidth, 0)))
+            {
+                buttons[i].action();
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Draws module status text with the appropriate color
+    /// </summary>
+    public static void DrawModuleStatus(bool isEnabled, bool isLoaded)
+    {
+        switch (isEnabled)
+        {
+            case true when isLoaded:
+                ImGui.TextColored(Colors.Enabled, "Loaded");
+                break;
+            case true when !isLoaded:
+                ImGui.TextColored(Colors.Pending, "Enabled");
+                break;
+            default:
+                ImGui.TextColored(Colors.Disabled, "Disabled");
+                break;
+        }
+    }
+    
+    /// <summary>
+    /// Draws text with a tooltip on hover
+    /// </summary>
+    public static void TextWithTooltip(string text, string tooltip)
+    {
+        ImGui.Text(text);
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(tooltip);
+        }
+    }
+    
+    /// <summary>
+    /// Creates a toggle button that changes color based on state
+    /// </summary>
+    public static bool ToggleButton(string label, ref bool value, string? tooltip = null)
+    {
+        using (ImRaii.PushColor(ImGuiCol.Button, value ? Colors.Success : Colors.TextDisabled))
+        {
+            if (ImGui.Button(label))
+            {
+                value = !value;
+                if (!string.IsNullOrEmpty(tooltip) && ImGui.IsItemHovered())
+                {
+                    ImGui.SetTooltip(tooltip);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /// <summary>
+    /// Draws centered text
+    /// </summary>
+    public static void CenteredText(string text)
+    {
+        var windowWidth = ImGui.GetWindowSize().X;
+        var textWidth = ImGui.CalcTextSize(text).X;
+        ImGui.SetCursorPosX((windowWidth - textWidth) * 0.5f);
+        ImGui.Text(text);
+    }
+    
+    /// <summary>
+    /// Draws multiple spacing elements
+    /// </summary>
+    public static void Spacing(int count = 1)
+    {
+        for (var i = 0; i < count; i++)
+            ImGui.Spacing();
+    }
+    
+    #endregion
+    
+    #region Table Helpers
+    
+    /// <summary>
+    /// Draws a table header with standard styling
+    /// </summary>
+    public static void SetupTableColumns(params (string name, ImGuiTableColumnFlags flags, float width)[] columns)
+    {
+        foreach (var (name, flags, width) in columns)
+        {
+            ImGui.TableSetupColumn(name, flags, width);
+        }
+        ImGui.TableHeadersRow();
+    }
+    
+    #endregion
+    
+    #region Private Classes
+    
     private class DummyDisposable : IDisposable
     {
         public void Dispose() { }
@@ -178,4 +442,6 @@ public static class LayoutHelpers
             }
         }
     }
+    
+    #endregion
 }

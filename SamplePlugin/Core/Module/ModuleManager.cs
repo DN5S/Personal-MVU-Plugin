@@ -1,11 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Dalamud.Interface.Windowing;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Microsoft.Extensions.DependencyInjection;
-using SamplePlugin.Core.Reactive;
 using SamplePlugin.Core.Configuration;
 
 namespace SamplePlugin.Core.Module;
@@ -48,25 +45,10 @@ public class ModuleManager(IServiceProvider globalServices, IPluginLog logger) :
             
             var services = new ServiceCollection();
             
-            // Register known services from the global service provider
-            services.AddSingleton(globalServices);
-            services.AddSingleton(globalServices.GetRequiredService<IPluginLog>());
-            services.AddSingleton(globalServices.GetRequiredService<EventBus>());
-            services.AddSingleton(globalServices.GetRequiredService<PluginConfiguration>());
+            // Use the extension method to register all standard services
+            services.AddModuleServices(globalServices);
             
-            // Register optional services if they exist
-            var pluginInterface = globalServices.GetService<IDalamudPluginInterface>();
-            if (pluginInterface != null) services.AddSingleton(pluginInterface);
-            
-            var commandManager = globalServices.GetService<ICommandManager>();
-            if (commandManager != null) services.AddSingleton(commandManager);
-            
-            var chatGui = globalServices.GetService<IChatGui>();
-            if (chatGui != null) services.AddSingleton(chatGui);
-            
-            var windowSystem = globalServices.GetService<WindowSystem>();
-            if (windowSystem != null) services.AddSingleton(windowSystem);
-            
+            // Let the module register its own specific services
             module.RegisterServices(services);
             
             var moduleProvider = services.BuildServiceProvider();

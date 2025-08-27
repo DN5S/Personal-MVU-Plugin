@@ -330,52 +330,72 @@ public class ConfigurationWindow : Window, IDisposable
         }
         
         // Dependency warning popup modal
-        if (ImGui.BeginPopupModal("Disable Module Warning"))
+        var popupOpen = true;
+        using (var disableWarningPopup = 
+               ImRaii.PopupModal("Disable Module Warning", ref popupOpen, 
+                                 ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove))
         {
-            ImGui.Text($"Warning: Disabling {moduleToDisable} will also disable:");
-            ImGui.Spacing();
-            
-            foreach (var dependent in affectedDependents)
+            if (disableWarningPopup)
             {
-                ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), $"  • {dependent}");
-            }
-            
-            ImGui.Spacing();
-            ImGui.Text("Do you want to continue?");
-            ImGui.Spacing();
-            
-            if (ImGui.Button("Yes, Disable All", new Vector2(120, 0)))
-            {
-                // Disable the module and all its dependents
-                var moduleConfig = configuration.GetModuleConfig(moduleToDisable);
-                moduleConfig.IsEnabled = false;
-                configuration.SetModuleConfig(moduleToDisable, moduleConfig);
+                ImGui.SetWindowSize(new Vector2(400, 0));
                 
-                // Also disable all dependent modules
-                foreach (var dependent in affectedDependents)
+                ImGui.Text($"Warning: Disabling {moduleToDisable} will also disable:");
+                ImGui.Spacing();
+                
+                // Create a child region for the dependent list to ensure proper scrolling if needed
+                using (ImRaii.Child("DependentsList", new Vector2(0, Math.Min(affectedDependents.Count * 25, 150)), true))
                 {
-                    var depConfig = configuration.GetModuleConfig(dependent);
-                    depConfig.IsEnabled = false;
-                    configuration.SetModuleConfig(dependent, depConfig);
+                    foreach (var dependent in affectedDependents)
+                    {
+                        ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), $"  • {dependent}");
+                    }
                 }
                 
-                configuration.Save();
-                moduleManager.ApplyConfigurationChanges(configuration);
-                ImGui.CloseCurrentPopup();
-                moduleToDisable = string.Empty;
-                affectedDependents.Clear();
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+                
+                ImGui.Text("Do you want to continue?");
+                ImGui.Spacing();
+                
+                var buttonWidth = 120f;
+                var spacing = 10f;
+                var totalWidth = buttonWidth * 2 + spacing;
+                var startX = (ImGui.GetContentRegionAvail().X - totalWidth) / 2;
+                
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + startX);
+                
+                if (ImGui.Button("Yes, Disable All", new Vector2(buttonWidth, 0)))
+                {
+                    // Disable the module and all its dependents
+                    var moduleConfig = configuration.GetModuleConfig(moduleToDisable);
+                    moduleConfig.IsEnabled = false;
+                    configuration.SetModuleConfig(moduleToDisable, moduleConfig);
+                    
+                    // Also disable all dependent modules
+                    foreach (var dependent in affectedDependents)
+                    {
+                        var depConfig = configuration.GetModuleConfig(dependent);
+                        depConfig.IsEnabled = false;
+                        configuration.SetModuleConfig(dependent, depConfig);
+                    }
+                    
+                    configuration.Save();
+                    moduleManager.ApplyConfigurationChanges(configuration);
+                    ImGui.CloseCurrentPopup();
+                    moduleToDisable = string.Empty;
+                    affectedDependents.Clear();
+                }
+                
+                ImGui.SameLine();
+                
+                if (ImGui.Button("Cancel", new Vector2(buttonWidth, 0)))
+                {
+                    ImGui.CloseCurrentPopup();
+                    moduleToDisable = string.Empty;
+                    affectedDependents.Clear();
+                }
             }
-            
-            ImGui.SameLine();
-            
-            if (ImGui.Button("Cancel", new Vector2(120, 0)))
-            {
-                ImGui.CloseCurrentPopup();
-                moduleToDisable = string.Empty;
-                affectedDependents.Clear();
-            }
-            
-            ImGui.EndPopup();
         }
         
         // Dependency error popup for enabling
