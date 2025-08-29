@@ -23,6 +23,10 @@ public abstract class ModuleBase : IModule
     
     public abstract void RegisterServices(IServiceCollection services);
     
+    public virtual void RegisterSharedServices(IServiceCollection services)
+    {
+    }
+    
     public virtual void Initialize()
     {
     }
